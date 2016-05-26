@@ -5,6 +5,7 @@ const extend = require('xtend')
 const path = require('path')
 const pipe = require('value-pipe')
 const browserify = require('browserify')
+const watchify = require('watchify')
 const envify = require('envify/custom')
 const uglifyify = require('uglifyify')
 const collapser = require('bundle-collapser/plugin')
@@ -20,7 +21,8 @@ const defaults = {
   basedir: process.cwd(),
   filename: 'bundle.js',
   config: {},
-  plugins: []
+  plugins: [],
+  watch: false
 }
 
 function bundleify (options, callback) {
@@ -33,9 +35,11 @@ function bundleify (options, callback) {
   const entry = path.resolve(options.basedir, options.entry)
   const compress = Compressor(options)
 
-  browserify({
-    debug: true
-  })
+  var stats = {}
+  var bundler = browserify(extend(
+    { debug: true },
+    options.watch ? watchify.args : null
+  ))
   .add(entry)
   .require(entry, {expose: 'app'})
   .plugin(customize, options)
@@ -44,13 +48,37 @@ function bundleify (options, callback) {
     global: true
   })
   .plugin(options.compress ? collapser : noop)
-  .bundle()
-  .pipe(pipe(Exorcise, compress)(options)())
-  .pipe(WriteStream(options))
-  .on('finish', done)
+
+  if (options.watch) {
+    bundler = bundler.plugin(
+      watchify,
+      typeof options.watch === 'object'
+        ? options.watch : undefined
+    )
+
+    bundler.on('update', bundle)
+  }
+
+  bundle()
+
+  bundler.on('bytes', function (b) { stats.bytes = b });
+  bundler.on('time', function (t) { stats.time = t });
+
+  function bundle () {
+    bundler
+    .bundle()
+    .on('error', error)
+    .pipe(pipe(Exorcise, compress)(options)())
+    .pipe(WriteStream(options))
+    .on('finish', done)
+  }
 
   function done () {
-    callback(null)
+    callback(null, stats)
+  }
+
+  function error (err) {
+    callback(err)
   }
 }
 
